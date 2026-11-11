@@ -16,6 +16,8 @@ export type Entry = {
   status: Status
   /** The subagent whose loop made the call; absent for the main loop. */
   agentId?: string
+  /** Where the call went, short: a file name, a site, a program, a skill. The page groups a station's calls by it. */
+  target?: string
   /** A moment the map marks: the model changed, or the answer is ready. */
   mark?: 'switch' | 'done'
 }
@@ -36,8 +38,13 @@ export type Crew = {
   status: 'run' | 'ok' | 'err'
   /** Its own calls per station; the main map's counts leave them out. */
   counts: Partial<Record<StationId, number>>
+  /** What its model steps cost so far, summed as the API reported them. */
+  tokens?: Tokens
   faults?: number
 }
+
+/** Token counts as the API reports them, summed over model steps. */
+export type Tokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export type Board = {
   entries: Entry[]
@@ -56,6 +63,8 @@ export type Board = {
   switchedAt?: number
   /** Subagents drawn as maps of their own, running ones first kept. */
   crew?: Crew[]
+  /** What the main loop's model steps cost so far. */
+  tokens?: Tokens
 }
 
 declare module 'claude-code' {

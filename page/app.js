@@ -36,7 +36,7 @@ let frameCount = 0
 let C = {}
 function readColours() {
   const css = getComputedStyle(document.documentElement)
-  for (const name of ['ground', 'raised', 'line', 'text', 'mute', 'dim', 'accent', 'hot', 'red', 'mem']) C[name] = css.getPropertyValue(`--${name}`).trim()
+  for (const name of ['ground', 'raised', 'line', 'text', 'mute', 'dim', 'accent', 'hot', 'red', 'mem', 'opus', 'sonnet', 'haiku', 'fable']) C[name] = css.getPropertyValue(`--${name}`).trim()
 }
 readColours()
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', readColours)
@@ -53,6 +53,16 @@ function spanOf(list, t, life) {
   }
   return span
 }
+/** Each model family has a colour of its own: the core, a subagent's ring and its link wear it. */
+const familyOf = m => /claude-([a-z]+)-/.exec(m || '')?.[1] ?? ''
+const modelColour = m => C[familyOf(m)] || C.mute
+const clip = (s, max = 16) => (s.length <= max ? s : `${s.slice(0, Math.ceil((max - 1) / 2))}…${s.slice(-Math.floor((max - 1) / 2))}`)
+const tokensOf = k => (k ? k.input + k.output + k.cacheRead + k.cacheWrite : 0)
+const fmtTokens = n => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`)
+/** Stations opened to show where their calls went, by node id. */
+const expanded = new Set()
+const LEAVES = 8
+
 const shortModel = m => {
   const x = /claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(m || '')
   return x ? `${x[1]} ${x[2]}${x[3] ? `.${x[3]}` : ''}` : (m || '')
@@ -99,6 +109,27 @@ function wanted(s, t) {
         count: m.counts?.[st.id] ?? 0, faults: 0, from: Number.isFinite(first) ? first : m.startedAt, until })
     }
   }
+  // An opened station shows where its calls went: one small node per target, the busiest first.
+  for (const w of [...out]) {
+    if (w.kind !== 'station' || !expanded.has(w.id)) continue
+    const groups = new Map()
+    for (const e of entries.filter(x => x.station === w.station && (x.agentId ?? null) === w.owner)) {
+      const key = e.target || e.label
+      const g = groups.get(key) ?? { key, calls: [], last: 0 }
+      g.calls.push(e)
+      g.last = Math.max(g.last, endOf(e, t))
+      groups.set(key, g)
+    }
+    const sorted = [...groups.values()].sort((a, b) => b.calls.length - a.calls.length || b.last - a.last)
+    for (const g of sorted.slice(0, LEAVES)) {
+      out.push({ id: `leaf:${w.id}:${g.key}`, kind: 'leaf', station: w.station, owner: w.owner, parent: w.id, target: g.key, label: clip(g.key),
+        count: g.calls.length, faults: g.calls.filter(e => e.status === 'err' || e.status === 'block').length, from: w.from, until: w.until })
+    }
+    if (sorted.length > LEAVES) {
+      out.push({ id: `leaf:${w.id}:+more`, kind: 'leaf', more: true, station: w.station, owner: w.owner, parent: w.id, target: '',
+        label: `+${sorted.length - LEAVES} more`, count: 0, faults: 0, from: w.from, until: w.until })
+    }
+  }
   return out
 }
 
@@ -131,7 +162,7 @@ function sync() {
 
 // ---- physics: nodes push apart, links pull together, the core sits in the middle ----------------
 
-const radius = n => (n.kind === 'core' ? 30 : n.kind === 'agent' ? 22 : n.owner ? 12 : 18)
+const radius = n => (n.kind === 'core' ? 30 : n.kind === 'agent' ? 22 : n.kind === 'leaf' ? 6 : n.owner ? 12 : 18)
 // ---- forces the person can tune, as in Obsidian's graph settings --------------------------------
 
 const DEFAULT_FORCES = { repel: 7000, gap: 34, distance: 1, strength: 0.04, centre: 1 }
@@ -168,7 +199,7 @@ function toggleForces() {
 $('forces-toggle').onclick = toggleForces
 showForces()
 
-const rest = l => (l.b.kind === 'agent' ? 170 : l.a.kind === 'core' ? 130 : 70) * forces.distance
+const rest = l => (l.b.kind === 'agent' ? 170 : l.b.kind === 'leaf' ? 52 : l.a.kind === 'core' ? 130 : 70) * forces.distance
 
 /** Paused, nothing moves by itself; a node dragged by hand still goes where it is put. */
 let paused = false
@@ -254,13 +285,14 @@ function draw() {
   // While searching, what matches stays bright and the rest steps back.
   const dim = n => Math.min(hoverDim(n), query && !matches.includes(n) ? 0.12 : 1)
   const entries = state?.board?.entries ?? []
-  const running = n => n.kind === 'station' ? entries.some(e => e.status === 'run' && e.station === n.station && (e.agentId ?? null) === n.owner)
+  const callsOf = n => entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && (n.kind !== 'leaf' || (e.target || e.label) === n.target))
+  const running = n => n.kind === 'station' || n.kind === 'leaf' ? callsOf(n).some(e => e.status === 'run')
     : n.kind === 'agent' ? n.agent.status === 'run' : entries.some(e => e.status === 'run' && e.agentId === undefined)
 
   // Links: a subagent's flows while it works.
   for (const l of links) {
     ctx.globalAlpha = Math.min(life(l.a), life(l.b)) * Math.min(dim(l.a), dim(l.b))
-    ctx.strokeStyle = l.b.kind === 'agent' ? (running(l.b) ? C.hot : C.mute) : (l.b.station === 'memory' ? C.mem : C.line)
+    ctx.strokeStyle = l.b.kind === 'agent' ? (running(l.b) ? modelColour(l.b.agent.model) : C.mute) : (l.b.station === 'memory' ? C.mem : C.line)
     ctx.lineWidth = l.b.kind === 'agent' ? 1.6 : 1 + Math.min(2.6, Math.log2(1 + (l.b.count ?? 0)) / 2.5)
     ctx.setLineDash(l.b.kind === 'agent' ? [4, 6] : [])
     ctx.lineDashOffset = l.b.kind === 'agent' && running(l.b) ? -(p / 40) % 20 : 0
@@ -293,17 +325,17 @@ function draw() {
     if (alpha <= 0.01) continue
     ctx.globalAlpha = alpha
     const run = running(n)
-    const colour = n.faults > 0 ? C.red : n.station === 'memory' ? C.mem : C.accent
-    const recent = n.kind === 'station' && entries.some(e => e.station === n.station && (e.agentId ?? null) === n.owner && t - endOf(e, t) < GLOW_MS)
+    const colour = n.faults > 0 ? C.red : n.kind === 'agent' ? modelColour(n.agent.model) : n.kind === 'core' ? modelColour(state?.board?.model) : n.station === 'memory' ? C.mem : C.accent
+    const recent = (n.kind === 'station' || n.kind === 'leaf') && callsOf(n).some(e => t - endOf(e, t) < GLOW_MS)
     if (run || recent) {
       ctx.fillStyle = colour
-      ctx.globalAlpha = alpha * (run ? 0.18 + 0.1 * Math.sin(p / 220) : 0.18 * (1 - Math.min(1, (t - Math.max(...entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner).map(e => endOf(e, t)))) / GLOW_MS)))
+      ctx.globalAlpha = alpha * (run ? 0.18 + 0.1 * Math.sin(p / 220) : 0.18 * (1 - Math.min(1, (t - Math.max(...callsOf(n).map(e => endOf(e, t)))) / GLOW_MS)))
       ctx.beginPath(); ctx.arc(n.x, n.y, r + 9, 0, Math.PI * 2); ctx.fill()
       ctx.globalAlpha = alpha
     }
     ctx.fillStyle = C.raised
     const found = query && matches.includes(n)
-    ctx.strokeStyle = n === selected || found ? C.text : run ? colour : n.kind === 'core' ? C.accent : C.line
+    ctx.strokeStyle = n === selected || found ? C.text : run || n.kind === 'agent' || n.kind === 'core' ? colour : C.line
     ctx.lineWidth = n === selected ? 2.4 : found ? 2 : n.kind === 'core' ? 1.8 : 1.3
     ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
 
@@ -322,10 +354,26 @@ function draw() {
         ctx.stroke(path); ctx.restore()
       }
     }
-    // Words: inside the core and a subagent, under a station.
+    // Words: inside the core and a subagent, under a station or a target.
     ctx.textAlign = 'center'
     ctx.fillStyle = C.text
+    if (n.kind === 'leaf') {
+      ctx.fillStyle = n.faults > 0 ? C.red : run || recent ? C.hot : n.more ? C.dim : C.mute
+      ctx.beginPath(); ctx.arc(n.x, n.y, r * 0.55, 0, Math.PI * 2); ctx.fill()
+      ctx.font = '9px "SF Mono", ui-monospace, Menlo, monospace'
+      ctx.fillStyle = run || recent ? C.text : C.mute
+      ctx.fillText(n.label, n.x, n.y + r + 10)
+      if (n.count > 1) { ctx.fillStyle = C.dim; ctx.font = '8px "SF Mono", ui-monospace, Menlo, monospace'; ctx.fillText(`×${n.count}`, n.x, n.y + r + 19) }
+      continue
+    }
     if (n.kind === 'station') {
+      // A small + says the station can open to show its targets; − that it is open.
+      if (expanded.has(n.id) || n === hovered) {
+        ctx.fillStyle = C.dim
+        ctx.font = 'bold 10px "SF Mono", ui-monospace, Menlo, monospace'
+        ctx.fillText(expanded.has(n.id) ? '−' : '+', n.x + r * 0.95, n.y - r * 0.7)
+        ctx.fillStyle = C.text
+      }
       ctx.font = `${n.owner ? 9.5 : 11.5}px "SF Mono", ui-monospace, Menlo, monospace`
       ctx.fillStyle = run || recent ? C.text : C.mute
       ctx.fillText(n.label, n.x, n.y + r + (n.owner ? 12 : 15))
@@ -340,7 +388,8 @@ function draw() {
         const took = Math.round(((m.endedAt ?? t) - m.startedAt) / 1000)
         ctx.fillStyle = m.status === 'err' ? C.red : C.mute
         ctx.font = '9px "SF Mono", ui-monospace, Menlo, monospace'
-        ctx.fillText(`${m.status === 'run' ? 'running' : m.status === 'err' ? '✕' : '✓'} ${took}s`, n.x, n.y + r + 13)
+        const spent = tokensOf(m.tokens)
+        ctx.fillText(`${m.status === 'run' ? 'running' : m.status === 'err' ? '✕' : '✓'} ${took}s${spent ? ` · ${fmtTokens(spent)} tokens` : ''}`, n.x, n.y + r + 13)
         if (m.task) { ctx.fillStyle = C.text; ctx.fillText(m.task.length > 30 ? `${m.task.slice(0, 29)}…` : m.task, n.x, n.y + r + 25) }
       }
     }
@@ -356,9 +405,10 @@ let matchAt = -1
 /** Everything a node can be found by. */
 function haystack(n) {
   const entries = state?.board?.entries ?? []
-  const own = n.kind === 'station' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
+  const own = n.kind === 'leaf' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && (e.target || e.label) === n.target)
+    : n.kind === 'station' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
     : n.kind === 'agent' ? entries.filter(e => e.agentId === n.agent.id) : []
-  return [n.label, n.sub, n.agent?.type, n.agent?.task, n.agent?.model, ...own.map(e => e.label)].filter(Boolean).join('\n').toLowerCase()
+  return [n.label, n.target, n.sub, n.agent?.type, n.agent?.task, n.agent?.model, ...own.map(e => `${e.label}\n${e.target ?? ''}`)].filter(Boolean).join('\n').toLowerCase()
 }
 function search(text) {
   query = text.trim().toLowerCase()
@@ -482,6 +532,15 @@ canvas.addEventListener('wheel', ev => {
   view.y = cy - ((cy - view.y) * k) / view.k
   view.k = k
 }, { passive: false })
+canvas.addEventListener('dblclick', ev => {
+  const n = hit(ev.clientX, ev.clientY)
+  const station = n?.kind === 'leaf' ? nodes.get(n.parent) : n
+  if (!station || station.kind !== 'station') return
+  if (expanded.has(station.id)) expanded.delete(station.id)
+  else expanded.add(station.id)
+  heat = Math.max(heat, 0.7)
+  sync()
+})
 $('fit').onclick = fit
 $('settle').onclick = () => { heat = 1 }
 addEventListener('keydown', ev => {
@@ -500,6 +559,13 @@ function openPanel(n) { selected = n; $('panel').hidden = false; fillPanel() }
 function closePanel() { selected = null; $('panel').hidden = true }
 $('close').onclick = closePanel
 const ago = ms => (ms < 1000 ? `${Math.round(ms)} ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`)
+/** "8.2k tokens (in 1.2k, out 3k, cache 4k)" or nothing. */
+function spentText(k) {
+  const total = tokensOf(k)
+  if (!total) return ''
+  return `${fmtTokens(total)} tokens (in ${fmtTokens(k.input)}, out ${fmtTokens(k.output)}, cache ${fmtTokens(k.cacheRead + k.cacheWrite)})`
+}
+
 function fillPanel() {
   const n = selected
   if (!n || !state) return
@@ -508,13 +574,29 @@ function fillPanel() {
   let list = []
   if (n.kind === 'core') {
     $('panel-title').textContent = `${n.label} · main agent`
-    $('panel-sub').textContent = [n.sub, state.board?.context !== undefined ? `context ${Math.round(state.board.context)}%` : '', state.board?.step ? `step ${state.board.step}` : ''].filter(Boolean).join(' · ')
+    $('panel-sub').textContent = [n.sub, state.board?.context !== undefined ? `context ${Math.round(state.board.context)}%` : '', state.board?.step ? `step ${state.board.step}` : '', spentText(state.board?.tokens)].filter(Boolean).join(' · ')
     list = entries.filter(e => e.agentId === undefined)
   } else if (n.kind === 'agent') {
     const m = n.agent
     $('panel-title').textContent = `${m.type} · subagent`
-    $('panel-sub').textContent = [shortModel(m.model), m.task, m.status === 'run' ? `running ${ago(t - m.startedAt)}` : `${m.status === 'err' ? 'failed' : 'done'} in ${ago((m.endedAt ?? t) - m.startedAt)}`].filter(Boolean).join(' · ')
+    $('panel-sub').textContent = [shortModel(m.model), m.task, m.status === 'run' ? `running ${ago(t - m.startedAt)}` : `${m.status === 'err' ? 'failed' : 'done'} in ${ago((m.endedAt ?? t) - m.startedAt)}`, spentText(m.tokens)].filter(Boolean).join(' · ')
     list = entries.filter(e => e.agentId === m.id)
+  } else if (n.kind === 'leaf') {
+    const station = nodes.get(n.parent)
+    const all = entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
+    if (n.more) {
+      // The targets past the first few, each with its count.
+      const shown = new Set([...nodes.values()].filter(x => x.parent === n.parent && x.kind === 'leaf' && !x.more).map(x => x.target))
+      const rest = new Map()
+      for (const e of all) { const k = e.target || e.label; if (!shown.has(k)) rest.set(k, (rest.get(k) ?? 0) + 1) }
+      $('panel-title').textContent = `More targets · ${station?.label ?? ''}`
+      $('panel-sub').textContent = `${rest.size} more`
+      list = [...rest].map(([k, c], i) => ({ id: `more${i}`, station: n.station, label: `${k}  ×${c}`, status: 'ok', startedAt: 0, endedAt: 0 }))
+    } else {
+      $('panel-title').textContent = n.target
+      $('panel-sub').textContent = `${station?.label ?? ''} · ${n.count} call${n.count === 1 ? '' : 's'}${n.faults ? ` · ${n.faults} failed or refused` : ''}`
+      list = all.filter(e => (e.target || e.label) === n.target)
+    }
   } else {
     $('panel-title').textContent = `${n.label}${n.owner ? ` · ${nodes.get(n.parent)?.label ?? 'subagent'}` : ''}`
     $('panel-sub').textContent = `${n.count} call${n.count === 1 ? '' : 's'}${n.faults ? ` · ${n.faults} failed or refused` : ''}`
@@ -525,10 +607,10 @@ function fillPanel() {
     const li = document.createElement('li')
     li.className = e.status === 'run' ? 'run' : e.status === 'ok' ? '' : 'err'
     const name = document.createElement('span')
-    name.textContent = `${e.status === 'run' ? '●' : e.status === 'ok' ? '·' : '✕'} ${n.kind === 'station' ? '' : `${state.names?.[e.station] ?? e.station}: `}${e.label}`
+    name.textContent = `${e.status === 'run' ? '●' : e.status === 'ok' ? '·' : '✕'} ${n.kind === 'station' || n.kind === 'leaf' ? '' : `${state.names?.[e.station] ?? e.station}: `}${e.label}`
     const when = document.createElement('span')
     when.className = 'when'
-    when.textContent = e.status === 'run' ? `${ago(t - e.startedAt)}…` : ago((e.endedAt ?? e.startedAt) - e.startedAt)
+    when.textContent = e.startedAt === 0 ? '' : e.status === 'run' ? `${ago(t - e.startedAt)}…` : ago((e.endedAt ?? e.startedAt) - e.startedAt)
     li.append(name, when)
     return li
   }))
@@ -550,6 +632,14 @@ function receive(text) {
   const b = next.board
   $('meta').textContent = [shortModel(b.model), b.context !== undefined ? `context ${Math.round(b.context)}%` : ''].filter(Boolean).join(' · ')
   $('now').textContent = next.now ?? ''
+  // The legend names the model families on the map, each with its colour.
+  const families = [...new Set([b.model, ...(b.crew ?? []).map(m => m.model)].map(familyOf).filter(Boolean))]
+  $('legend').replaceChildren(...families.map(f => {
+    const span = document.createElement('span')
+    span.textContent = f
+    span.style.setProperty('--dot', C[f] || C.mute)
+    return span
+  }))
   sync()
 }
 

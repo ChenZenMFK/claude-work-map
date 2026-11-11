@@ -206,6 +206,29 @@ function classifyShell(command: string, description: string, setup: Setup, power
   return { station: 'shell', label }
 }
 
+/** Where a call went, in a few characters: what the page groups a station's calls by when it is opened. */
+export function targetOf(tool: string, input: Record<string, unknown>, seen: Classified): string {
+  const url = str(input.url)
+  if (url !== '') return hostOf(url) || seen.label
+  const path = str(input.file_path) || str(input.notebook_path) || str(input.path)
+  if (path !== '') return slashes(path).split('/').filter(Boolean).pop() ?? path
+  if (str(input.pattern) !== '') return str(input.pattern)
+  if (tool === 'Bash' || tool === 'PowerShell') {
+    const words = segments(str(input.command))[0] ?? []
+    if (seen.station === 'files') {
+      // A file command goes by the file it works on: its last word that is not a flag.
+      const file = [...words].reverse().find(w => !w.startsWith('-') && /[./]/.test(w))
+      if (file !== undefined) return slashes(file).split('/').filter(Boolean).pop() ?? file
+    }
+    return base(words[0]) || seen.label
+  }
+  if (tool === 'Agent' || tool === 'Task') return str(input.subagent_type) || 'general-purpose'
+  if (tool === 'Skill') return str(input.skill) || seen.label
+  const mcp = /^mcp__([^_].*?)__(.+)$/.exec(tool)
+  if (mcp !== null) return seen.station === 'browser' ? (str(input.action) || (mcp[2] as string).replace(/_/g, ' ')) : (mcp[1] as string)
+  return seen.label
+}
+
 export function classify(tool: string, input: Record<string, unknown>, setup: Setup): Classified {
   const { t } = setup
   switch (tool) {

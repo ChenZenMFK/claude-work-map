@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Board, Crew, Entry, StationId, Status } from '../types'
-import { FADE_MS, LIFE_MS, STATIONS, classify, clean, describeNow, firstLine, foldRows, formatMs, memoryIds, setupFrom, shortModel } from './map'
+import type { Board, Crew, Entry, StationId, Status, Tokens } from '../types'
+import { FADE_MS, LIFE_MS, STATIONS, classify, clean, describeNow, firstLine, foldRows, formatMs, memoryIds, setupFrom, shortModel, targetOf } from './map'
 import type { Setup } from './map'
 
 const PANE = 'work-map'
@@ -18,6 +18,17 @@ const board = atom({ plugin: 'work-map', key: 'board' } as const, { entries: [],
 async function updateBoard($: EngineInterface, fn: (b: Board) => Board): Promise<void> {
   await update($, board, fn)
   changedBoard($)
+}
+
+/** Adds one model step's token counts to a running total. */
+function addTokens(sum: Tokens | undefined, usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }): Tokens {
+  const n = (v: number | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  return {
+    input: (sum?.input ?? 0) + n(usage.input_tokens),
+    output: (sum?.output ?? 0) + n(usage.output_tokens),
+    cacheRead: (sum?.cacheRead ?? 0) + n(usage.cache_read_input_tokens),
+    cacheWrite: (sum?.cacheWrite ?? 0) + n(usage.cache_creation_input_tokens),
+  }
 }
 
 /** The board's subagents with one changed or added, keeping every running one and the latest finished ones. */
@@ -45,6 +56,7 @@ async function quietly<T>(work: () => Promise<T>): Promise<T | undefined> {
 type Start = {
   station: StationId
   label: string
+  target?: string
   from?: Entry['from']
   status?: Status
   agentId?: string
@@ -72,6 +84,7 @@ async function begin($: EngineInterface, start: Start): Promise<string | undefin
       status: start.status ?? 'run',
       ...(start.status !== undefined ? { endedAt: start.endedAt ?? now } : {}),
       ...(start.agentId !== undefined ? { agentId: start.agentId } : {}),
+      ...(start.target !== undefined ? { target: clean(start.target, 60) } : {}),
       ...(start.mark !== undefined ? { mark: start.mark } : {}),
     }
     const ofAgent = entry.agentId
@@ -324,7 +337,16 @@ export const register: Register = (on, options) => {
       })
     }
     try {
-      return yield* next(e)
+      const result = yield* next(e)
+      // Each model step reports what it cost: added to its subagent, or to the main loop.
+      const usage = result?.usage
+      if (usage) {
+        await quietly(async () => {
+          const now = await $.clock.now()
+          await updateBoard($, b => (stepAgent === undefined ? { ...b, tokens: addTokens(b.tokens, usage) } : withCrew(b, stepAgent, now, c => ({ ...c, tokens: addTokens(c.tokens, usage) }))))
+        })
+      }
+      return result
     } finally {
       await finish($, id, 'ok', isMain ? await contextOf($) : undefined)
     }
@@ -385,7 +407,8 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const id = await quietly(async () => {
       const seen = classify(e.tool, e as unknown as Record<string, unknown>, setup)
-      return begin($, { ...seen, ...(e.agentId === undefined ? { from: 'core' as const } : { from: 'agents' as const, agentId: e.agentId }) })
+      const target = targetOf(e.tool, e as unknown as Record<string, unknown>, seen)
+      return begin($, { ...seen, target, ...(e.agentId === undefined ? { from: 'core' as const } : { from: 'agents' as const, agentId: e.agentId }) })
     })
     try {
       const ran = await next(e)

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { classify, setupFrom } from './map'
+import { classify, setupFrom, targetOf } from './map'
 
 const PANE = {
   plugin: 'work-map',
@@ -44,6 +44,37 @@ test('calls land on their stations, as in lot-map', () => {
   expect(classify('Read', { file_path: '/a/b.md' }, setup).station).toBe('files')
   expect(classify('Bash', { command: 'git push origin main' }, setup).station).toBe('web')
   expect(classify('Agent', { description: 'x' }, setup).station).toBe('agents')
+})
+
+test('each call names its target in a few characters: a file, a site, a program, a skill', () => {
+  const setup = setupFrom({})
+  const at = (tool: string, input: Record<string, unknown>) => targetOf(tool, input, classify(tool, input, setup))
+  expect(at('Read', { file_path: '/Users/x/project/docs/README.md' })).toBe('README.md')
+  expect(at('WebFetch', { url: 'https://github.com/alexeyw/lot-map?tab=readme' })).toBe('github.com')
+  expect(at('Bash', { command: 'git status --short', description: 'Show status' })).toBe('git')
+  expect(at('Bash', { command: 'cat -n docs/PLAN.md', description: 'Read the plan' })).toBe('PLAN.md')
+  expect(at('Skill', { skill: 'app-builder:verify' })).toBe('app-builder:verify')
+  expect(at('Agent', { description: 'x', subagent_type: 'Explore' })).toBe('Explore')
+  expect(at('mcp__Claude_Browser__computer', { action: 'screenshot' })).toBe('screenshot')
+})
+
+test('model steps add their tokens to the subagent that ran them, and to the main loop', async ($, on) => {
+  const w = world(on)
+  on('turn.step', async function* (_, e) {
+    return { turnId: 't', index: 0, answer: '', toolUses: [], stopReason: 'end_turn',
+      usage: { model: 'claude-haiku-5-5', input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 5 } } as never
+  })
+  await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  const step = (agentId?: string) => ({ turnId: 't', index: 0, model: 'claude-haiku-5-5', ...(agentId ? { agentId } : {}) }) as never
+  for await (const _ of $.turn.step(step('a1'))) { /* streamed pieces */ }
+  for await (const _ of $.turn.step(step('a1'))) { /* streamed pieces */ }
+  for await (const _ of $.turn.step(step())) { /* streamed pieces */ }
+  await w.clock.settle()
+  const state = JSON.parse((w.writes[w.writes.length - 1] as { text: string }).text)
+  const crew = state.board.crew.find((c: { id: string }) => c.id === 'a1')
+  expect(crew.tokens).toEqual({ input: 200, output: 40, cacheRead: 600, cacheWrite: 10 })
+  expect(state.board.tokens).toEqual({ input: 100, output: 20, cacheRead: 300, cacheWrite: 5 })
 })
 
 test('the session starts the page server on this computer, with a random key in its address', async ($, on) => {
