@@ -70,6 +70,42 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(response.fp.readline(), b'data: {"n": 2}\n')
         conn.close()
 
+    def test_tidy_deletes_old_states_in_its_own_folder_only(self):
+        import os
+        root = Path(self.tmp.name) / 'home' / '.claude' / 'work-map'
+        root.mkdir(parents=True)
+        old, fresh, mine, other = root / 'old.json', root / 'fresh.json', root / 'mine.json', root / 'notes.txt'
+        for f in (old, fresh, mine, other):
+            f.write_text('{}')
+        week = time.time() - 8 * 86400
+        for f in (old, mine, other):
+            os.utime(f, (week, week))
+        (root / 'below').mkdir()
+        deep = root / 'below' / 'deep.json'
+        deep.write_text('{}')
+        os.utime(deep, (week, week))
+        proc = subprocess.Popen([sys.executable, '-I', str(SERVE), '--state', str(mine), '--token', TOKEN, '--page', str(self.page), '--tidy-days', '7'],
+                                stdout=subprocess.PIPE, text=True)
+        proc.stdout.readline()
+        proc.terminate(); proc.wait(5); proc.stdout.close()
+        self.assertFalse(old.exists(), 'an old state is deleted')
+        self.assertTrue(fresh.exists(), 'a recent state stays')
+        self.assertTrue(mine.exists(), "the session's own state stays, however old")
+        self.assertTrue(other.exists(), 'only .json files')
+        self.assertTrue(deep.exists(), 'nothing below the folder')
+
+    def test_tidy_only_runs_in_a_work_map_folder(self):
+        import os
+        stray = Path(self.tmp.name) / 'old.json'
+        stray.write_text('{}')
+        week = time.time() - 8 * 86400
+        os.utime(stray, (week, week))
+        proc = subprocess.Popen([sys.executable, '-I', str(SERVE), '--state', str(self.state), '--token', TOKEN, '--page', str(self.page), '--tidy-days', '7'],
+                                stdout=subprocess.PIPE, text=True)
+        proc.stdout.readline()
+        proc.terminate(); proc.wait(5); proc.stdout.close()
+        self.assertTrue(stray.exists())
+
     def test_a_weak_token_is_refused(self):
         result = subprocess.run([sys.executable, '-I', str(SERVE), '--state', str(self.state), '--token', 'short', '--page', str(self.page)],
                                 capture_output=True, text=True, timeout=10)

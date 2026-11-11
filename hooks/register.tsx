@@ -167,9 +167,38 @@ let again = false
 const token = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join('')
 
 /** Where this session's state is saved: ~/.claude/work-map/<session>.json. */
+/** The Python 3 to run the server with: python3 on Mac and Linux; on Windows often py -3 or python,
+ *  where python3 may be the Store's placeholder that prints no version. */
+let python: string[] | undefined
+/** The person's home folder (forward slashes) and the system, as Python reports them. */
+let host: { home: string; platform: string } | undefined
+
+async function pythonOf($: EngineInterface): Promise<string[] | undefined> {
+  if (python !== undefined) return python
+  for (const cmd of [['python3'], ['py', '-3'], ['python']]) {
+    const ran = await quietly(() => $.process.run([...cmd, '--version'], { timeoutMs: 8000 }))
+    if (ran !== undefined && ran.exitCode === 0 && /Python 3\./.test(`${ran.stdout}${ran.stderr}`)) {
+      python = cmd
+      return cmd
+    }
+  }
+  return undefined
+}
+
+async function hostOf($: EngineInterface): Promise<{ home: string; platform: string }> {
+  if (host !== undefined) return host
+  const py = await pythonOf($)
+  if (py === undefined) throw new Error('no Python 3')
+  const ran = await $.process.run([...py, '-I', '-c', 'import pathlib, sys; print(pathlib.Path.home()); print(sys.platform)'])
+  const [home = '', platform = ''] = ran.stdout.trim().split(/\r?\n/)
+  host = { home: home.trim().replace(/\\/g, '/').replace(/\/$/, ''), platform: platform.trim() }
+  return host
+}
+
+/** Where this session's state is saved: ~/.claude/work-map/<session>.json, on any system. */
 async function pathOf($: EngineInterface): Promise<string> {
   if (statePath !== undefined) return statePath
-  const home = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
+  const { home } = await hostOf($)
   const id = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '')
   statePath = `${home}/.claude/work-map/${id || 'session'}.json`
   return statePath
@@ -222,7 +251,8 @@ function serve($: EngineInterface): Promise<string | undefined> {
     const state = await pathOf($)
     await quietly(() => save($))
     const run = $.process.spawn({
-      argv: ['python3', '-I', `${$.plugin.root}/server/serve.py`, '--state', state, '--token', token, '--page', `${$.plugin.root}/page`],
+      // The server also deletes saved states older than a week, in Python, the same on every system.
+      argv: [...((await pythonOf($)) ?? ['python3']), '-I', `${$.plugin.root}/server/serve.py`, '--state', state, '--token', token, '--page', `${$.plugin.root}/page`, '--tidy-days', '7'],
     })[Symbol.asyncIterator]()
     let out = ''
     for (;;) {
@@ -253,18 +283,14 @@ function serve($: EngineInterface): Promise<string | undefined> {
   return starting
 }
 
-/** Deletes saved states older than a week: only .json files, only in the map's own folder, never below it. */
-async function tidyStates($: EngineInterface): Promise<void> {
-  const state = await pathOf($)
-  const folder = state.slice(0, state.lastIndexOf('/'))
-  if (!folder.endsWith('/.claude/work-map')) return
-  await $.process.run(['find', folder, '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete'])
-}
-
 /** Opens the page in the person's browser. */
 async function openPage($: EngineInterface): Promise<string | undefined> {
   const address = await serve($)
-  if (address !== undefined) await quietly(() => $.process.run(['open', address]))
+  if (address === undefined) return undefined
+  // Each system opens a web address in the default browser its own way.
+  const { platform } = await hostOf($)
+  const opener = platform === 'win32' ? ['explorer.exe', address] : platform === 'darwin' ? ['open', address] : ['xdg-open', address]
+  await quietly(() => $.process.run(opener))
   return address
 }
 
@@ -289,7 +315,6 @@ export const register: Register = (on, options) => {
     await quietly(() => $.command.register({ name: 'work-map', description: 'Open the live work map in your browser' }))
     void quietly(() => $.ui.open({ id: PANE, title: t.title }))
     void quietly(() => serve($))
-    void quietly(() => tidyStates($))
     await quietly(async () => {
       modelKey = `model:${e.cwd}`
       const kept = await $.store.get(modelKey)
@@ -301,7 +326,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'work-map' }, async $ => {
     void quietly(() => $.ui.open({ id: PANE, title: t.title }))
     const address = await openPage($)
-    return { text: address === undefined ? 'The work map could not start: Python 3 is needed (python3).' : `Work map opened in your browser: ${address}` }
+    return { text: address === undefined ? 'The work map could not start: it needs Python 3 (python3, or py on Windows).' : `Work map opened in your browser: ${address}` }
   })
 
   on('turn.start', async ($, e, next) => {

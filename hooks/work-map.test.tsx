@@ -9,8 +9,9 @@ const PANE = {
   props: { title: 'Work map', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 
-/** The world beneath the mod: a home folder, a session, a server that prints its port, and the files it writes. */
-function world(on: Parameters<Parameters<typeof test>[1]>[1]) {
+/** The world beneath the mod: a home folder, a session, a server that prints its port, and the files it writes.
+ *  `windows` makes python3 the Store's placeholder, py -3 the working Python and the home a C: folder. */
+function world(on: Parameters<Parameters<typeof test>[1]>[1], windows = false) {
   const clock = mock.clock(on)
   const writes: { path: string; text: string }[] = []
   const runs: string[][] = []
@@ -20,8 +21,14 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1]) {
     return { value: undefined }
   })
   on('process.run', (_, e) => {
-    runs.push([...(e as { argv: string[] }).argv])
-    return { value: { exitCode: 0, stdout: '/Users/test\n', stderr: '' } }
+    const argv = [...(e as { argv: string[] }).argv]
+    runs.push(argv)
+    if (argv.includes('--version')) {
+      const works = windows ? argv[0] === 'py' : argv[0] === 'python3'
+      return { value: works ? { exitCode: 0, stdout: 'Python 3.12.1\n', stderr: '' } : { exitCode: 9009, stdout: '', stderr: '' } }
+    }
+    if (argv.includes('-c')) return { value: { exitCode: 0, stdout: windows ? 'C:\\Users\\Ann\r\nwin32\r\n' : '/Users/test\ndarwin\n', stderr: '' } }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
   on('process.spawn', async function* (_, e) {
     spawns.push([...(e as { argv: string[] }).argv])
@@ -89,12 +96,27 @@ test('the session starts the page server on this computer, with a random key in 
   expect(argv[argv.indexOf('--token') + 1]).toMatch(/^[a-z0-9]{24,}$/)
 })
 
-test('a session start deletes saved states older than a week, in the map folder only', async ($, on) => {
+test('the server is asked to delete saved states older than a week', async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })
   await w.clock.settle()
-  const tidy = w.runs.find(r => r[0] === 'find')
-  expect(tidy).toEqual(['find', '/Users/test/.claude/work-map', '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete'])
+  const argv = w.spawns[0] as string[]
+  expect(argv[argv.indexOf('--tidy-days') + 1]).toBe('7')
+  expect(w.runs.some(r => r[0] === 'find')).toBe(false)
+})
+
+test('on Windows it finds py -3, saves under C:/Users and opens the browser with explorer', async ($, on) => {
+  const w = world(on, true)
+  await $.session.start({ cwd: 'C:\\work\\App', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  const argv = w.spawns[0] as string[]
+  expect(argv.slice(0, 3)).toEqual(['py', '-3', '-I'])
+  expect(argv[argv.indexOf('--state') + 1]).toBe('C:/Users/Ann/.claude/work-map/abc-123.json')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'open-map' })
+  expect(w.runs.some(r => r[0] === 'explorer.exe' && /^http:\/\/127\.0\.0\.1:4321\//.test(r[1] ?? ''))).toBe(true)
+  expect(w.runs.some(r => r[0] === 'open' || r[0] === 'printenv')).toBe(false)
+  await ui.unmount()
 })
 
 test('every change is saved for the page, a burst folded into few saves, with names, icons and the board', async ($, on) => {

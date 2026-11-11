@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Serve the work map page on this computer only, and push the session's state to it as it changes.
 
-Usage: python3 -I serve.py --state FILE --token TOKEN --page DIR
+Usage: python3 -I serve.py --state FILE --token TOKEN --page DIR [--tidy-days N]
 
 Started by the work-map mod and stopped with it. Binds 127.0.0.1 on a free
 port and prints "PORT <n>". Every address needs the session's random token,
 and the Host header must name this computer, so no other website can read the
-session through the browser. Read-only: it never writes a file.
+session through the browser. It never writes a file; with --tidy-days it deletes
+the saved states older than that in the state file's own folder, and nothing else.
 """
 import argparse
 import http.server
@@ -100,14 +101,36 @@ def make_handler(state: Path, token: str, page: Path, stop: threading.Event):
     return Handler
 
 
+def tidy(state: Path, days: float) -> int:
+    """Deletes *.json older than `days` beside the state file, never the state file itself.
+
+    Only in a folder named work-map, and never below it: the map's own saved states.
+    """
+    folder = state.parent
+    if days <= 0 or folder.name != 'work-map' or not folder.is_dir():
+        return 0
+    cutoff = time.time() - days * 86400
+    gone = 0
+    for item in folder.iterdir():
+        try:
+            if item.suffix == '.json' and item.is_file() and not item.is_symlink() and item.resolve() != state.resolve() and item.stat().st_mtime < cutoff:
+                item.unlink()
+                gone += 1
+        except OSError:
+            pass
+    return gone
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--state', type=Path, required=True)
     parser.add_argument('--token', required=True)
     parser.add_argument('--page', type=Path, required=True)
+    parser.add_argument('--tidy-days', type=float, default=0, help='delete saved states older than this many days')
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_-]{16,}', args.token):
         parser.error('the token must be at least 16 letters, digits, - or _')
+    tidy(args.state, args.tidy_days)
     stop = threading.Event()
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), make_handler(args.state, args.token, args.page.resolve(), stop))
     server.daemon_threads = True

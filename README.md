@@ -29,12 +29,12 @@ claude plugin install work-map --marketplace ChenZenMFK/claude-work-map
 
 In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `ChenZenMFK/claude-work-map`, then **Add plugin**.
 
-Needs Python 3 (`python3`) for the local server. Built and tested on Claude Code 2.1.321 on macOS.
+Needs Python 3 for the local server: `python3` on macOS and Linux; on Windows `py` (the Python launcher) or `python` from python.org, since the `python3` there is often only a placeholder for the Microsoft Store. Built and used on Claude Code 2.1.321 on macOS; Windows and Linux are covered by its tests.
 
 ## Use
 
 Open it with the **Open map** button in the pane or `/work-map`. The mod starts a small local server
-(`server/serve.py`, Python 3) with the session and stops it with the session. It binds 127.0.0.1 only, every
+(`server/serve.py`, Python 3) with the session and stops it with the session. It opens the page with `open` on macOS, `explorer.exe` on Windows and `xdg-open` on Linux. It binds 127.0.0.1 only, every
 address carries a random key, and other websites are refused. The state is saved to
 `~/.claude/work-map/<session>.json`; files older than a week are deleted when a session starts. No model calls, no credits: the map is drawn on your computer.
 

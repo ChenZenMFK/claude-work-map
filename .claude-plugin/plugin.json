@@ -1,6 +1,6 @@
 {
   "name": "work-map",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "A live, draggable map of what Claude is doing, in your browser: the main agent, its tools and its subagents, each with its model (based on alexeyw/lot-map, MIT)",
   "license": "MIT",
   "types": "./types/index.d.ts",
