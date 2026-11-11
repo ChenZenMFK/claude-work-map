@@ -325,6 +325,7 @@ export const register: Register = (on, options) => {
     const id = await begin($, {
       station: 'model',
       label: `${shortModel(e.model)} · ${t.step(e.index + 1)}${isMain ? '' : ` · ${t.subagent}`}`,
+      target: shortModel(e.model),
       from: isMain ? 'core' : 'agents',
       ...(isMain ? { patch: { model: e.model, step: e.index + 1 } } : { agentId: e.agentId }),
     })

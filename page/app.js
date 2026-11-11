@@ -61,6 +61,8 @@ const tokensOf = k => (k ? k.input + k.output + k.cacheRead + k.cacheWrite : 0)
 const fmtTokens = n => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`)
 /** Stations opened to show where their calls went, by node id. */
 const expanded = new Set()
+/** What a call is grouped by when its station opens: its target; a model step by its model, whatever its step. */
+const keyOf = e => e.target || (e.station === 'model' ? e.label.split(' · ')[0] : e.label)
 const LEAVES = 8
 
 const shortModel = m => {
@@ -114,7 +116,7 @@ function wanted(s, t) {
     if (w.kind !== 'station' || !expanded.has(w.id)) continue
     const groups = new Map()
     for (const e of entries.filter(x => x.station === w.station && (x.agentId ?? null) === w.owner)) {
-      const key = e.target || e.label
+      const key = keyOf(e)
       const g = groups.get(key) ?? { key, calls: [], last: 0 }
       g.calls.push(e)
       g.last = Math.max(g.last, endOf(e, t))
@@ -285,7 +287,7 @@ function draw() {
   // While searching, what matches stays bright and the rest steps back.
   const dim = n => Math.min(hoverDim(n), query && !matches.includes(n) ? 0.12 : 1)
   const entries = state?.board?.entries ?? []
-  const callsOf = n => entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && (n.kind !== 'leaf' || (e.target || e.label) === n.target))
+  const callsOf = n => entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && (n.kind !== 'leaf' || keyOf(e) === n.target))
   const running = n => n.kind === 'station' || n.kind === 'leaf' ? callsOf(n).some(e => e.status === 'run')
     : n.kind === 'agent' ? n.agent.status === 'run' : entries.some(e => e.status === 'run' && e.agentId === undefined)
 
@@ -405,7 +407,7 @@ let matchAt = -1
 /** Everything a node can be found by. */
 function haystack(n) {
   const entries = state?.board?.entries ?? []
-  const own = n.kind === 'leaf' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && (e.target || e.label) === n.target)
+  const own = n.kind === 'leaf' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner && keyOf(e) === n.target)
     : n.kind === 'station' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
     : n.kind === 'agent' ? entries.filter(e => e.agentId === n.agent.id) : []
   return [n.label, n.target, n.sub, n.agent?.type, n.agent?.task, n.agent?.model, ...own.map(e => `${e.label}\n${e.target ?? ''}`)].filter(Boolean).join('\n').toLowerCase()
@@ -493,14 +495,19 @@ function hit(cx, cy) {
 
 let pan = null
 let moved = false
+// A real hand wobbles: a press that moves less than this is still a click, not a drag.
+const CLICK_SLOP = 5
+let downAt = { x: 0, y: 0 }
 canvas.addEventListener('pointerdown', ev => {
-  canvas.setPointerCapture(ev.pointerId)
+  try { canvas.setPointerCapture(ev.pointerId) } catch { /* a pointer the browser no longer tracks: carry on without capture */ }
   moved = false
+  downAt = { x: ev.clientX, y: ev.clientY }
   const n = hit(ev.clientX, ev.clientY)
   if (n) { dragging = n; heat = Math.max(heat, 0.5) } else pan = { x: ev.clientX - view.x, y: ev.clientY - view.y }
   canvas.classList.add('dragging')
 })
 canvas.addEventListener('pointermove', ev => {
+  if ((dragging || pan) && !moved && Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) < CLICK_SLOP) return
   if (dragging) {
     const q = toWorld(ev.clientX, ev.clientY)
     dragging.x = q.x; dragging.y = q.y; moved = true
@@ -535,7 +542,7 @@ const release = ev => {
   if (pan && !moved) closePanel()
   dragging = null; pan = null
   canvas.classList.remove('dragging')
-  if (ev.pointerId !== undefined && canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId)
+  try { if (ev.pointerId !== undefined && canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId) } catch { /* nothing held */ }
 }
 canvas.addEventListener('pointerup', release)
 canvas.addEventListener('pointercancel', release)
@@ -599,14 +606,14 @@ function fillPanel() {
       // The targets past the first few, each with its count.
       const shown = new Set([...nodes.values()].filter(x => x.parent === n.parent && x.kind === 'leaf' && !x.more).map(x => x.target))
       const rest = new Map()
-      for (const e of all) { const k = e.target || e.label; if (!shown.has(k)) rest.set(k, (rest.get(k) ?? 0) + 1) }
+      for (const e of all) { const k = keyOf(e); if (!shown.has(k)) rest.set(k, (rest.get(k) ?? 0) + 1) }
       $('panel-title').textContent = `More targets · ${station?.label ?? ''}`
       $('panel-sub').textContent = `${rest.size} more`
       list = [...rest].map(([k, c], i) => ({ id: `more${i}`, station: n.station, label: `${k}  ×${c}`, status: 'ok', startedAt: 0, endedAt: 0 }))
     } else {
       $('panel-title').textContent = n.target
       $('panel-sub').textContent = `${station?.label ?? ''} · ${n.count} call${n.count === 1 ? '' : 's'}${n.faults ? ` · ${n.faults} failed or refused` : ''}`
-      list = all.filter(e => (e.target || e.label) === n.target)
+      list = all.filter(e => keyOf(e) === n.target)
     }
   } else {
     $('panel-title').textContent = `${n.label}${n.owner ? ` · ${nodes.get(n.parent)?.label ?? 'subagent'}` : ''}`
