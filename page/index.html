@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Work map</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Work map</h1>
+  <span id="meta"></span>
+  <span id="live" class="live">Connecting…</span>
+  <button id="fit" type="button" title="Fit everything in the window (F)">Fit</button>
+  <button id="settle" type="button" title="Let the graph settle again (S)">Settle</button>
+  <button id="forces-toggle" type="button" aria-expanded="false" aria-controls="forces" title="Forces: how the graph spreads out (G)">Forces</button>
+</header>
+<main>
+  <canvas id="map" aria-label="Live map of what Claude is doing: the main agent, its stations and its subagents"></canvas>
+  <section id="forces" hidden aria-label="Forces">
+    <h2>Forces</h2>
+    <label>Repel <output id="out-repel"></output><input id="repel" type="range" min="1000" max="20000" step="500"></label>
+    <label>Gap <output id="out-gap"></output><input id="gap" type="range" min="0" max="120" step="2"></label>
+    <label>Link distance <output id="out-distance"></output><input id="distance" type="range" min="0.4" max="2.5" step="0.05"></label>
+    <label>Link strength <output id="out-strength"></output><input id="strength" type="range" min="0.01" max="0.15" step="0.005"></label>
+    <label>Centre <output id="out-centre"></output><input id="centre" type="range" min="0" max="3" step="0.1"></label>
+    <button id="forces-reset" type="button">Reset</button>
+  </section>
+  <aside id="panel" hidden>
+    <button id="close" type="button" aria-label="Close details">×</button>
+    <h2 id="panel-title"></h2>
+    <p id="panel-sub"></p>
+    <ol id="panel-list"></ol>
+  </aside>
+  <p id="now" class="now"></p>
+  <p class="hint">Drag nodes · drag the background to pan · wheel or pinch to zoom · click a node for details</p>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "work-map",
+  "owner": { "name": "Stefan Kiefer" },
+  "plugins": [
+    { "name": "work-map", "source": "./", "description": "A live, draggable map of what Claude is doing, in your browser" }
+  ]
+}
