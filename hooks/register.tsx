@@ -253,6 +253,14 @@ function serve($: EngineInterface): Promise<string | undefined> {
   return starting
 }
 
+/** Deletes saved states older than a week: only .json files, only in the map's own folder, never below it. */
+async function tidyStates($: EngineInterface): Promise<void> {
+  const state = await pathOf($)
+  const folder = state.slice(0, state.lastIndexOf('/'))
+  if (!folder.endsWith('/.claude/work-map')) return
+  await $.process.run(['find', folder, '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete'])
+}
+
 /** Opens the page in the person's browser. */
 async function openPage($: EngineInterface): Promise<string | undefined> {
   const address = await serve($)
@@ -281,6 +289,7 @@ export const register: Register = (on, options) => {
     await quietly(() => $.command.register({ name: 'work-map', description: 'Open the live work map in your browser' }))
     void quietly(() => $.ui.open({ id: PANE, title: t.title }))
     void quietly(() => serve($))
+    void quietly(() => tidyStates($))
     await quietly(async () => {
       modelKey = `model:${e.cwd}`
       const kept = await $.store.get(modelKey)

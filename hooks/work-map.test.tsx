@@ -89,6 +89,14 @@ test('the session starts the page server on this computer, with a random key in 
   expect(argv[argv.indexOf('--token') + 1]).toMatch(/^[a-z0-9]{24,}$/)
 })
 
+test('a session start deletes saved states older than a week, in the map folder only', async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  const tidy = w.runs.find(r => r[0] === 'find')
+  expect(tidy).toEqual(['find', '/Users/test/.claude/work-map', '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete'])
+})
+
 test('every change is saved for the page, a burst folded into few saves, with names, icons and the board', async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })

@@ -652,7 +652,9 @@ function receive(text) {
   $('title').textContent = title
   document.title = title
   const b = next.board
-  $('meta').textContent = [shortModel(b.model), b.context !== undefined ? `context ${Math.round(b.context)}%` : ''].filter(Boolean).join(' · ')
+  // The main agent's tokens in the top bar; each subagent's sit under its node.
+  const spent = tokensOf(b.tokens)
+  $('meta').textContent = [shortModel(b.model), b.context !== undefined ? `context ${Math.round(b.context)}%` : '', spent ? `${fmtTokens(spent)} tokens` : ''].filter(Boolean).join(' · ')
   $('now').textContent = next.now ?? ''
   // The legend names the model families on the map, each with its colour.
   const families = [...new Set([b.model, ...(b.crew ?? []).map(m => m.model)].map(familyOf).filter(Boolean))]
