@@ -512,8 +512,26 @@ canvas.addEventListener('pointermove', ev => {
     canvas.classList.toggle('over', Boolean(hovered))
   }
 })
+/** Opens or closes a station's targets; a target stands for its station. */
+function toggleTargets(n) {
+  const station = n?.kind === 'leaf' ? nodes.get(n.parent) : n
+  if (!station || station.kind !== 'station') return
+  if (expanded.has(station.id)) expanded.delete(station.id)
+  else expanded.add(station.id)
+  heat = Math.max(heat, 0.7)
+  sync()
+  if (selected === station) fillPanel()
+}
+// A double-click is two clicks on the same node within 400 ms, told apart here and not by the
+// browser's own dblclick, which some browsers drop after a click that captured the pointer.
+let lastClick = { id: null, at: 0 }
 const release = ev => {
-  if (dragging && !moved) openPanel(dragging)
+  if (dragging && !moved) {
+    const at = performance.now()
+    if (lastClick.id === dragging.id && at - lastClick.at < 400) { toggleTargets(dragging); lastClick = { id: null, at: 0 } }
+    else lastClick = { id: dragging.id, at }
+    openPanel(dragging)
+  }
   if (pan && !moved) closePanel()
   dragging = null; pan = null
   canvas.classList.remove('dragging')
@@ -532,21 +550,14 @@ canvas.addEventListener('wheel', ev => {
   view.y = cy - ((cy - view.y) * k) / view.k
   view.k = k
 }, { passive: false })
-canvas.addEventListener('dblclick', ev => {
-  const n = hit(ev.clientX, ev.clientY)
-  const station = n?.kind === 'leaf' ? nodes.get(n.parent) : n
-  if (!station || station.kind !== 'station') return
-  if (expanded.has(station.id)) expanded.delete(station.id)
-  else expanded.add(station.id)
-  heat = Math.max(heat, 0.7)
-  sync()
-})
+$('toggle-targets').onclick = () => toggleTargets(selected)
 $('fit').onclick = fit
 $('settle').onclick = () => { heat = 1 }
 addEventListener('keydown', ev => {
   if (ev.target instanceof HTMLInputElement && ev.target.type !== 'range') return
   if (ev.key === '/') { ev.preventDefault(); $('search').focus(); return }
   if (ev.key === 'p' || ev.key === 'P') setPaused(!paused)
+  if ((ev.key === 'c' || ev.key === 'C') && expanded.size) { expanded.clear(); heat = Math.max(heat, 0.7); sync(); if (selected) fillPanel() }
   if (ev.key === 'f' || ev.key === 'F') fit()
   if (ev.key === 's' || ev.key === 'S') heat = 1
   if (ev.key === 'g' || ev.key === 'G') toggleForces()
@@ -602,6 +613,10 @@ function fillPanel() {
     $('panel-sub').textContent = `${n.count} call${n.count === 1 ? '' : 's'}${n.faults ? ` · ${n.faults} failed or refused` : ''}`
     list = entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
   }
+  // A station, or one of its targets, can open and close from here as well as by double-click.
+  const owner = n.kind === 'leaf' ? nodes.get(n.parent) : n
+  $('toggle-targets').hidden = owner?.kind !== 'station'
+  $('toggle-targets').textContent = owner && expanded.has(owner.id) ? 'Hide targets' : 'Show targets'
   const ol = $('panel-list')
   ol.replaceChildren(...list.slice(-14).reverse().map(e => {
     const li = document.createElement('li')

@@ -42,3 +42,4 @@ button[aria-expanded=true] { border-color: var(--accent); color: var(--accent); 
 button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 #legend { position: fixed; right: 16px; bottom: 30px; display: flex; gap: 12px; color: var(--mute); font-size: 11px; z-index: 2; }
 #legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--dot); vertical-align: 0; }
+#toggle-targets { margin: 0 0 10px; }
