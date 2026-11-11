@@ -6,6 +6,7 @@ A live, draggable map of what Claude is doing, in your browser. Based on
 - The main agent sits in the middle with the stations it uses: Files, Shell, Network, Memory, Skills, Hooks and more.
 - Every subagent is a node of its own, linked to the main agent (or to the subagent that started it), with its own stations, its type, task and model.
 - Drag nodes, drag the background to pan, wheel or pinch to zoom, Fit (F) to see everything. Click a node for its recent calls.
+- Search (/) by name, by a subagent's type, task or model, or by the calls behind a station, such as a file or command; Enter goes to the next match. Pause (P) stops the graph moving while you look.
 - Forces (G), as in Obsidian's graph settings: Repel, Gap, Link distance, Link strength and Centre, live, remembered in this browser, with Reset.
 - A living graph: nodes pop in when first used and fade out after 2 minutes unused; pulses fly along the links for every call.
 

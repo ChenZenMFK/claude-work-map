@@ -10,8 +10,11 @@
 <header>
   <h1 id="title">Work map</h1>
   <span id="meta"></span>
+  <input id="search" type="search" placeholder="Search  /" aria-label="Search nodes and their calls" autocomplete="off" spellcheck="false">
+  <span id="found" class="found" aria-live="polite"></span>
   <span id="live" class="live">Connecting…</span>
   <button id="fit" type="button" title="Fit everything in the window (F)">Fit</button>
+  <button id="pause" type="button" aria-pressed="false" title="Stop the graph moving while you look (P)">Pause</button>
   <button id="settle" type="button" title="Let the graph settle again (S)">Settle</button>
   <button id="forces-toggle" type="button" aria-expanded="false" aria-controls="forces" title="Forces: how the graph spreads out (G)">Forces</button>
 </header>

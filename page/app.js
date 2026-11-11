@@ -29,6 +29,7 @@ let dragging = null
 const view = { x: 0, y: 0, k: 1 }
 /** The view follows the graph until the person pans or zooms; Fit turns following back on. */
 let follow = true
+let frameCount = 0
 
 // ---- colours, from the page's own theme ---------------------------------------------------------
 
@@ -169,8 +170,18 @@ showForces()
 
 const rest = l => (l.b.kind === 'agent' ? 170 : l.a.kind === 'core' ? 130 : 70) * forces.distance
 
+/** Paused, nothing moves by itself; a node dragged by hand still goes where it is put. */
+let paused = false
+function setPaused(on) {
+  paused = on
+  $('pause').textContent = on ? 'Resume' : 'Pause'
+  $('pause').setAttribute('aria-pressed', String(on))
+  if (!on) heat = Math.max(heat, 0.5)
+}
+$('pause').onclick = () => setPaused(!paused)
+
 function step() {
-  if (heat < 0.003 && !dragging) return
+  if (paused || (heat < 0.003 && !dragging)) return
   const list = [...nodes.values()]
   for (let i = 0; i < list.length; i++) {
     const a = list[i]
@@ -239,7 +250,9 @@ function draw() {
     const timed = Number.isFinite(n.until) && t > n.until ? Math.max(0, 1 - (t - n.until) / (state?.fade ?? FADE_DEFAULT)) : 1
     return Math.min(pop, leave, timed)
   }
-  const dim = n => (focus && !isNeighbour(n, focus) && !(focus.kind !== 'station' && n.parent === focus.id) ? 0.16 : 1)
+  const hoverDim = n => (focus && !isNeighbour(n, focus) && !(focus.kind !== 'station' && n.parent === focus.id) ? 0.16 : 1)
+  // While searching, what matches stays bright and the rest steps back.
+  const dim = n => Math.min(hoverDim(n), query && !matches.includes(n) ? 0.12 : 1)
   const entries = state?.board?.entries ?? []
   const running = n => n.kind === 'station' ? entries.some(e => e.status === 'run' && e.station === n.station && (e.agentId ?? null) === n.owner)
     : n.kind === 'agent' ? n.agent.status === 'run' : entries.some(e => e.status === 'run' && e.agentId === undefined)
@@ -289,8 +302,9 @@ function draw() {
       ctx.globalAlpha = alpha
     }
     ctx.fillStyle = C.raised
-    ctx.strokeStyle = n === selected ? C.text : run ? colour : n.kind === 'core' ? C.accent : C.line
-    ctx.lineWidth = n === selected ? 2.4 : n.kind === 'core' ? 1.8 : 1.3
+    const found = query && matches.includes(n)
+    ctx.strokeStyle = n === selected || found ? C.text : run ? colour : n.kind === 'core' ? C.accent : C.line
+    ctx.lineWidth = n === selected ? 2.4 : found ? 2 : n.kind === 'core' ? 1.8 : 1.3
     ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
 
     if (n.kind === 'core' && state?.board?.context !== undefined) {
@@ -334,7 +348,51 @@ function draw() {
   ctx.globalAlpha = 1
 }
 
+// ---- search: nodes by name, by a subagent's type, task or model, and by the calls behind a station --
+
+let query = ''
+let matches = []
+let matchAt = -1
+/** Everything a node can be found by. */
+function haystack(n) {
+  const entries = state?.board?.entries ?? []
+  const own = n.kind === 'station' ? entries.filter(e => e.station === n.station && (e.agentId ?? null) === n.owner)
+    : n.kind === 'agent' ? entries.filter(e => e.agentId === n.agent.id) : []
+  return [n.label, n.sub, n.agent?.type, n.agent?.task, n.agent?.model, ...own.map(e => e.label)].filter(Boolean).join('\n').toLowerCase()
+}
+function search(text) {
+  query = text.trim().toLowerCase()
+  matches = query ? [...nodes.values()].filter(n => !n.leaving && haystack(n).includes(query)) : []
+  matchAt = -1
+  $('found').textContent = query ? (matches.length ? `${matches.length} found` : 'none') : ''
+  $('found').className = query && !matches.length ? 'found none' : 'found'
+}
+/** Goes to the next match: centres it, a little closer, and opens its details. */
+function nextMatch(step = 1) {
+  if (!matches.length) return
+  matchAt = (matchAt + step + matches.length) % matches.length
+  const n = matches[matchAt]
+  follow = false
+  view.k = Math.max(view.k, 1.2)
+  view.x = -n.x * view.k
+  view.y = -n.y * view.k
+  openPanel(n)
+  $('found').textContent = `${matchAt + 1} of ${matches.length}`
+}
+$('search').addEventListener('input', ev => search(ev.target.value))
+$('search').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') { ev.preventDefault(); nextMatch(ev.shiftKey ? -1 : 1) }
+  if (ev.key === 'Escape') { ev.target.value = ''; search(''); ev.target.blur() }
+})
+
 function frame() {
+  // New calls and new nodes join the search as they come.
+  if (query && frameCount++ % 30 === 0) {
+    const keep = matches[matchAt]
+    matches = [...nodes.values()].filter(n => !n.leaving && haystack(n).includes(query))
+    matchAt = keep ? matches.indexOf(keep) : -1
+    if (matchAt < 0) $('found').textContent = matches.length ? `${matches.length} found` : 'none'
+  }
   sync()
   step()
   ease()
@@ -428,6 +486,8 @@ $('fit').onclick = fit
 $('settle').onclick = () => { heat = 1 }
 addEventListener('keydown', ev => {
   if (ev.target instanceof HTMLInputElement && ev.target.type !== 'range') return
+  if (ev.key === '/') { ev.preventDefault(); $('search').focus(); return }
+  if (ev.key === 'p' || ev.key === 'P') setPaused(!paused)
   if (ev.key === 'f' || ev.key === 'F') fit()
   if (ev.key === 's' || ev.key === 'S') heat = 1
   if (ev.key === 'g' || ev.key === 'G') toggleForces()
@@ -499,6 +559,9 @@ function connect() {
   source.onmessage = ev => receive(ev.data)
   source.onerror = () => { $('live').textContent = 'Reconnecting…'; $('live').className = 'live off' }
 }
+
+/** Read-only: where each node is, for checking the page from outside. */
+window.workMapPositions = () => [...nodes.values()].map(n => [n.id, Math.round(n.x), Math.round(n.y)])
 
 fetch(`${base}state`, { cache: 'no-store' }).then(r => r.text()).then(receive).catch(() => {})
 connect()

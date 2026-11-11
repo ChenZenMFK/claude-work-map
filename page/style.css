@@ -28,10 +28,15 @@ aside li.run { color: var(--hot); }
 #close { position: absolute; top: 8px; right: 8px; padding: 2px 8px; }
 .now { position: fixed; left: 16px; bottom: 30px; margin: 0; color: var(--text); max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint { position: fixed; left: 16px; bottom: 8px; margin: 0; color: var(--dim); font-size: 11px; }
-@media (max-width: 600px) { #meta { display: none; } .hint { display: none; } }
+@media (max-width: 600px) { #meta { display: none; } .hint { display: none; } #search { width: 34vw; } }
 #forces { position: fixed; top: 52px; left: 12px; width: min(260px, calc(100vw - 24px)); background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; z-index: 3; box-shadow: 0 8px 30px #0006; }
 #forces h2 { font-size: 13px; margin: 0 0 8px; }
 #forces label { display: block; color: var(--mute); margin: 0 0 8px; font-size: 12px; }
 #forces output { float: right; color: var(--text); }
 #forces input[type=range] { display: block; width: 100%; margin-top: 2px; accent-color: var(--accent); }
 button[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+#search { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; width: min(220px, 30vw); }
+#search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.found { color: var(--mute); font-size: 12px; min-width: 4ch; }
+.found.none { color: var(--red); }
+button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
