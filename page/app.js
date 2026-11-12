@@ -649,7 +649,7 @@ function receive(text) {
   state = next
   icons.clear()
   const title = next.folder ? `Work map · ${next.folder}` : 'Work map'
-  $('title').textContent = title
+  // The picker names the session's folder; the tab's title does too.
   document.title = title
   const b = next.board
   // The main agent's tokens in the top bar; each subagent's sit under its node.
@@ -667,16 +667,51 @@ function receive(text) {
   sync()
 }
 
+// One server shows every session: ?s=<session> picks one, without it the page follows the latest.
+let chosen = new URLSearchParams(location.search).get('s') || 'latest'
+let source = null
+const ask = () => (chosen === 'latest' ? '' : `?s=${encodeURIComponent(chosen)}`)
+
 function connect() {
-  const source = new EventSource(`${base}events`)
+  if (source) source.close()
+  source = new EventSource(`${base}events${ask()}`)
   source.onopen = () => { $('live').textContent = 'Live'; $('live').className = 'live on' }
   source.onmessage = ev => receive(ev.data)
-  source.onerror = () => { $('live').textContent = 'Reconnecting…'; $('live').className = 'live off' }
+  // The server stops when every session is idle; the browser keeps retrying, and the next session brings it back on the same address.
+  source.onerror = () => { $('live').textContent = 'Waiting for a session…'; $('live').className = 'live off' }
 }
+
+const since = ms => (ms < 60_000 ? 'now' : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min ago` : ms < 86_400_000 ? `${Math.round(ms / 3_600_000)} h ago` : `${Math.round(ms / 86_400_000)} d ago`)
+
+/** The session list, refreshed now and then: the folder and how long ago each one last changed. */
+async function listSessions() {
+  let list
+  try { list = await (await fetch(`${base}sessions`, { cache: 'no-store' })).json() } catch { return }
+  if (!Array.isArray(list)) return
+  const pick = $('session')
+  if (chosen !== 'latest' && !list.some(s => s.id === chosen)) list.push({ id: chosen, folder: 'this session', savedAt: 0 })
+  const options = [new Option('Latest session', 'latest'), ...list.map(s => new Option(`${s.folder || 'session'}${s.savedAt ? ` · ${since(Date.now() - s.savedAt)}` : ''}`, s.id))]
+  pick.replaceChildren(...options)
+  pick.value = chosen
+}
+
+$('session').addEventListener('change', () => {
+  chosen = $('session').value
+  const address = new URL(location.href)
+  if (chosen === 'latest') address.searchParams.delete('s'); else address.searchParams.set('s', chosen)
+  history.replaceState(null, '', address)
+  // A different session is a different graph: start it fresh.
+  nodes.clear()
+  state = null
+  fetch(`${base}state${ask()}`, { cache: 'no-store' }).then(r => r.text()).then(receive).catch(() => {})
+  connect()
+})
 
 /** Read-only: where each node is, for checking the page from outside. */
 window.workMapPositions = () => [...nodes.values()].map(n => [n.id, Math.round(n.x), Math.round(n.y)])
 
-fetch(`${base}state`, { cache: 'no-store' }).then(r => r.text()).then(receive).catch(() => {})
+fetch(`${base}state${ask()}`, { cache: 'no-store' }).then(r => r.text()).then(receive).catch(() => {})
 connect()
+listSessions()
+setInterval(listSessions, 15000)
 requestAnimationFrame(frame)

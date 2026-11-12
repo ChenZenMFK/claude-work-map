@@ -33,10 +33,16 @@ Needs Python 3 for the local server: `python3` on macOS and Linux; on Windows `p
 
 ## Use
 
-Open it with the **Open map** button in the pane or `/work-map`. The mod starts a small local server
-(`server/serve.py`, Python 3) with the session and stops it with the session. It opens the page with `open` on macOS, `explorer.exe` on Windows and `xdg-open` on Linux. It binds 127.0.0.1 only, every
-address carries a random key, and other websites are refused. The state is saved to
-`~/.claude/work-map/<session>.json`; files older than a week are deleted when a session starts. No model calls, no credits: the map is drawn on your computer.
+Open it with the **Open map** button in the pane or `/work-map`. One small local server
+(`server/serve.py`, Python 3) serves every session on one address that stays the same, so a bookmarked
+or open tab keeps working across sessions; the picker at the top chooses the session, or follows the
+latest. A session finds the server or starts it on its own, apart from Claude Code, so short print-mode
+runs (chat windows built on `claude -p`) never wait on it. It stops itself after 30 minutes with no
+session saving, and comes back on the same address with the next one; an open tab reconnects by itself.
+It opens the page with `open` on macOS, `explorer.exe` on Windows and `xdg-open` on Linux. It binds
+127.0.0.1 only, the address carries a random key kept in `~/.claude/work-map/server.json`, and other
+websites are refused. Each session's state is saved to `~/.claude/work-map/<session>.json`; files older
+than a week are deleted. No model calls, no credits: the map is drawn on your computer.
 
 ## Licence
 

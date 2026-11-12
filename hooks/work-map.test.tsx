@@ -2,6 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { classify, setupFrom, targetOf } from './map'
 
+const KEY = 'abcdefghijklmnop1234'
+const ADDRESS = `http://127.0.0.1:4321/${KEY}/?s=abc-123`
+
 const PANE = {
   plugin: 'work-map',
   component: 'Pane',
@@ -9,13 +12,12 @@ const PANE = {
   props: { title: 'Work map', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 
-/** The world beneath the mod: a home folder, a session, a server that prints its port, and the files it writes.
+/** The world beneath the mod: a home folder, a session, the shared server that answers with its port and key, and the files it writes.
  *  `windows` makes python3 the Store's placeholder, py -3 the working Python and the home a C: folder. */
 function world(on: Parameters<Parameters<typeof test>[1]>[1], windows = false) {
   const clock = mock.clock(on)
   const writes: { path: string; text: string }[] = []
   const runs: string[][] = []
-  const spawns: string[][] = []
   on('fs.write', (_, e) => {
     writes.push(e as { path: string; text: string })
     return { value: undefined }
@@ -27,15 +29,9 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], windows = false) {
       const works = windows ? argv[0] === 'py' : argv[0] === 'python3'
       return { value: works ? { exitCode: 0, stdout: 'Python 3.12.1\n', stderr: '' } : { exitCode: 9009, stdout: '', stderr: '' } }
     }
+    if (argv.includes('--ensure')) return { value: { exitCode: 0, stdout: `PORT 4321 TOKEN ${KEY}\n`, stderr: '' } }
     if (argv.includes('-c')) return { value: { exitCode: 0, stdout: windows ? 'C:\\Users\\Ann\r\nwin32\r\n' : '/Users/test\ndarwin\n', stderr: '' } }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
-  })
-  on('process.spawn', async function* (_, e) {
-    spawns.push([...(e as { argv: string[] }).argv])
-    yield { stream: 'stdout', text: 'PORT 4321\n' } as never
-    // The server runs until the session ends: here, an hour on the test's clock.
-    await clock.sleep(3_600_000)
-    return { code: 0 } as never
   })
   on('session.id', () => ({ value: 'abc-123' }))
   on('session.cwd', () => ({ value: '/work/My App' }))
@@ -43,7 +39,7 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], windows = false) {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('tool.call', () => ({ result: {} }))
-  return { clock, writes, runs, spawns }
+  return { clock, writes, runs, ensured: () => runs.filter(r => r.includes('--ensure')) }
 }
 
 test('calls land on their stations, as in lot-map', () => {
@@ -84,37 +80,46 @@ test('model steps add their tokens to the subagent that ran them, and to the mai
   expect(state.board.tokens).toEqual({ input: 100, output: 20, cacheRead: 300, cacheWrite: 5 })
 })
 
-test('the session starts the page server on this computer, with a random key in its address', async ($, on) => {
+test('the session finds or starts the one shared map server, which keeps old states a week', async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })
   await w.clock.settle()
-  expect(w.spawns.length).toBe(1)
-  const argv = w.spawns[0] as string[]
+  expect(w.ensured().length).toBe(1)
+  const argv = w.ensured()[0] as string[]
   expect(argv[0]).toBe('python3')
   expect(argv[2]).toMatch(/\/server\/serve\.py$/)
-  expect(argv[argv.indexOf('--state') + 1]).toBe('/Users/test/.claude/work-map/abc-123.json')
-  expect(argv[argv.indexOf('--token') + 1]).toMatch(/^[a-z0-9]{24,}$/)
+  expect(argv[argv.indexOf('--dir') + 1]).toBe('/Users/test/.claude/work-map')
+  expect(argv[argv.indexOf('--tidy-days') + 1]).toBe('7')
+  const said = await $.command.run({ command: 'work-map', args: '' } as never)
+  expect(JSON.stringify(said)).toContain(ADDRESS)
 })
 
-test('the server is asked to delete saved states older than a week', async ($, on) => {
+test('a new message looks for the server again once the address is five minutes old', async ($, on) => {
   const w = world(on)
+  on('turn.start', (_, e) => e as never)
   await $.session.start({ cwd: '/work/My App', surface: 'desktop', isInteractive: true })
   await w.clock.settle()
-  const argv = w.spawns[0] as string[]
-  expect(argv[argv.indexOf('--tidy-days') + 1]).toBe('7')
-  expect(w.runs.some(r => r[0] === 'find')).toBe(false)
+  await $.turn.start({ text: 'hi', turnId: 't1' } as never)
+  await w.clock.settle()
+  expect(w.ensured().length).toBe(1)
+  await w.clock.advance(6 * 60_000)
+  await $.turn.start({ text: 'again', turnId: 't2' } as never)
+  await w.clock.settle()
+  expect(w.ensured().length).toBe(2)
 })
 
 test('on Windows it finds py -3, saves under C:/Users and opens the browser with explorer', async ($, on) => {
   const w = world(on, true)
   await $.session.start({ cwd: 'C:\\work\\App', surface: 'desktop', isInteractive: true })
   await w.clock.settle()
-  const argv = w.spawns[0] as string[]
+  const argv = w.ensured()[0] as string[]
   expect(argv.slice(0, 3)).toEqual(['py', '-3', '-I'])
-  expect(argv[argv.indexOf('--state') + 1]).toBe('C:/Users/Ann/.claude/work-map/abc-123.json')
+  expect(argv[argv.indexOf('--dir') + 1]).toBe('C:/Users/Ann/.claude/work-map')
+  // The test kit runs on a Mac and reads C:/ as relative, so only the end of the path is compared.
+  expect(w.writes.some(x => x.path.endsWith('C:/Users/Ann/.claude/work-map/abc-123.json'))).toBe(true)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'open-map' })
-  expect(w.runs.some(r => r[0] === 'explorer.exe' && /^http:\/\/127\.0\.0\.1:4321\//.test(r[1] ?? ''))).toBe(true)
+  expect(w.runs.some(r => r[0] === 'explorer.exe' && r[1] === ADDRESS)).toBe(true)
   expect(w.runs.some(r => r[0] === 'open' || r[0] === 'printenv')).toBe(false)
   await ui.unmount()
 })
@@ -137,6 +142,7 @@ test('every change is saved for the page, a burst folded into few saves, with na
   expect(state.stations.length).toBe(10)
   expect(state.board.entries.map((e: { station: string }) => e.station)).toEqual(['files', 'files'])
   expect(typeof state.savedAt).toBe('number')
+  expect(state.session).toBe('abc-123')
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -148,7 +154,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Text', text: /b\/content\.py/ })).toBeDefined()
     expect(await ui.find({ type: 'Button', text: /Open map/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^http:\/\/127\.0\.0\.1:4321\/[a-z0-9]+\/$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ADDRESS })).toBeDefined()
     await ui.unmount()
   })
 }
@@ -159,7 +165,7 @@ test('Open map opens the page in the browser', async ($, on) => {
   await w.clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'open-map' })
-  expect(w.runs.some(r => r[0] === 'open' && /^http:\/\/127\.0\.0\.1:4321\/[a-z0-9]+\/$/.test(r[1] ?? ''))).toBe(true)
+  expect(w.runs.some(r => r[0] === 'open' && r[1] === ADDRESS)).toBe(true)
   await ui.unmount()
 })
 

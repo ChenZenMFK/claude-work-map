@@ -164,7 +164,6 @@ let starting: Promise<string | undefined> | undefined
 let statePath: string | undefined
 let saving = false
 let again = false
-const token = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join('')
 
 /** Where this session's state is saved: ~/.claude/work-map/<session>.json. */
 /** The Python 3 to run the server with: python3 on Mac and Linux; on Windows often py -3 or python,
@@ -216,6 +215,7 @@ async function save($: EngineInterface): Promise<void> {
     await pathOf($),
     JSON.stringify({
       v: 1,
+      session: (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, ''),
       savedAt: now,
       folder: cwd.split('/').filter(Boolean).pop() ?? '',
       coreName: setup.core,
@@ -244,48 +244,43 @@ function changedBoard($: EngineInterface): void {
   })()
 }
 
-/** Starts the page's server once; resolves its address, or undefined when it cannot start. */
-function serve($: EngineInterface): Promise<string | undefined> {
-  if (url !== undefined) return Promise.resolve(url)
-  starting ??= (async () => {
+/** How long an address is trusted before the server is looked for again; it stops itself when every session is idle. */
+const RECHECK_MS = 5 * 60_000
+let checkedAt = 0
+
+/** Finds the one map server every session shares, or starts it detached, and resolves this session's address.
+ *  The server outlives this session, so a short print-mode run never waits on it, and an open tab keeps its address. */
+function serve($: EngineInterface, fresh = false): Promise<string | undefined> {
+  if (starting !== undefined) return starting
+  const work = (async () => {
+    const now = await $.clock.now()
+    if (url !== undefined && !fresh && now - checkedAt < RECHECK_MS) return url
     const state = await pathOf($)
     await quietly(() => save($))
-    const run = $.process.spawn({
+    const folder = state.slice(0, state.lastIndexOf('/'))
+    const ran = await $.process.run(
       // The server also deletes saved states older than a week, in Python, the same on every system.
-      argv: [...((await pythonOf($)) ?? ['python3']), '-I', `${$.plugin.root}/server/serve.py`, '--state', state, '--token', token, '--page', `${$.plugin.root}/page`, '--tidy-days', '7'],
-    })[Symbol.asyncIterator]()
-    let out = ''
-    for (;;) {
-      const piece = await run.next()
-      if (piece.done || !('text' in piece.value)) return undefined
-      out += piece.value.text
-      const port = /PORT (\d+)/.exec(out)?.[1]
-      if (port === undefined) continue
-      url = `http://127.0.0.1:${port}/${token}/`
-      // The server lives as long as this loop: keep reading until it ends, then forget it.
-      void (async () => {
-        try {
-          while (!(await run.next()).done) {
-            /* nothing to read: the server prints its port and nothing else */
-          }
-        } catch {
-          /* the module unloaded */
-        }
-        url = undefined
-        starting = undefined
-      })()
-      return url
-    }
-  })().catch(() => {
-    starting = undefined
-    return undefined
-  })
-  return starting
+      [...((await pythonOf($)) ?? ['python3']), '-I', `${$.plugin.root}/server/serve.py`, '--ensure', '--dir', folder, '--page', `${$.plugin.root}/page`, '--tidy-days', '7'],
+      { timeoutMs: 20_000 },
+    )
+    const found = /PORT (\d+) TOKEN ([A-Za-z0-9_-]{16,})/.exec(ran.stdout)
+    if (ran.exitCode !== 0 || found === null) return undefined
+    const session = state.slice(state.lastIndexOf('/') + 1).replace(/\.json$/, '')
+    url = `http://127.0.0.1:${found[1]}/${found[2]}/?s=${session}`
+    checkedAt = now
+    return url
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      starting = undefined
+    })
+  starting = work
+  return work
 }
 
 /** Opens the page in the person's browser. */
 async function openPage($: EngineInterface): Promise<string | undefined> {
-  const address = await serve($)
+  const address = await serve($, true)
   if (address === undefined) return undefined
   // Each system opens a web address in the default browser its own way.
   const { platform } = await hostOf($)
@@ -331,6 +326,8 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined && e.text !== '') {
+      // The shared server stops itself when every session is idle; a new message brings it back.
+      void quietly(() => serve($))
       // A new message clears what went wrong on the way to the last answer.
       await quietly(() => updateBoard($, b => (b.faults === undefined ? b : { ...b, faults: {} })))
       await begin($, { station: 'you', label: t.newMessage, from: 'inbound', status: 'ok' })
